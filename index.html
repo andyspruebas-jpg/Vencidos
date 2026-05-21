@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light" data-style="luminoso">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vencidos — Gestión de Productos</title>
+  <link rel="stylesheet" href="components/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- Data -->
+  <script src="components/mock-data.js"></script>
+
+  <!-- Components -->
+  <script type="text/babel" src="components/login.jsx"></script>
+  <script type="text/babel" src="components/app-shell.jsx"></script>
+  <script type="text/babel" src="components/sala-view.jsx"></script>
+  <script type="text/babel" src="components/dashboard.jsx"></script>
+  <script type="text/babel" src="components/data-table.jsx"></script>
+  <script type="text/babel" src="components/admin-view.jsx"></script>
+  <script type="text/babel" src="components/tweaks-panel.jsx"></script>
+
+  <!-- Main App -->
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "style": "cristal",
+      "theme": "dark"
+    }/*EDITMODE-END*/;
+
+    const App = () => {
+      const [tweaks, setTweakState] = React.useState(() => {
+        try { const s = localStorage.getItem('vencidos_tweaks'); return s ? {...TWEAK_DEFAULTS, ...JSON.parse(s)} : TWEAK_DEFAULTS; }
+        catch { return TWEAK_DEFAULTS; }
+      });
+      const [currentUser, setCurrentUser] = React.useState(null);
+      const [currentView, setCurrentView] = React.useState(null);
+      const [apiReady, setApiReady] = React.useState(false);
+      const [apiError, setApiError] = React.useState('');
+
+      const roleViews = React.useMemo(() => ({
+        sala: ['registro', 'mis-productos', 'catalogo'],
+        supervisor: ['dashboard', 'tabla', 'consolidado', 'catalogo', 'auditoria', 'usuarios', 'sincronizacion'],
+        admin: ['dashboard', 'tabla', 'consolidado', 'catalogo', 'auditoria', 'usuarios', 'sincronizacion'],
+      }), []);
+
+      const getHomeView = React.useCallback(
+        (user) => (user.role === 'sala' ? 'registro' : 'dashboard'),
+        []
+      );
+
+      const getViewStorageKey = React.useCallback(
+        (user) => `vencidos_view_${user?.id || 'anon'}`,
+        []
+      );
+
+      const isViewAllowed = React.useCallback(
+        (user, view) => !!view && (roleViews[user?.role] || roleViews.sala).includes(view),
+        [roleViews]
+      );
+
+      const getInitialView = React.useCallback((user) => {
+        const homeView = getHomeView(user);
+        try {
+          const savedView = localStorage.getItem(getViewStorageKey(user));
+          return isViewAllowed(user, savedView) ? savedView : homeView;
+        } catch {
+          return homeView;
+        }
+      }, [getHomeView, getViewStorageKey, isViewAllowed]);
+
+      const setTweak = (keyOrObj, val) => {
+        setTweakState(prev => {
+          const next = typeof keyOrObj === 'string' ? {...prev, [keyOrObj]: val} : {...prev, ...keyOrObj};
+          localStorage.setItem('vencidos_tweaks', JSON.stringify(next));
+          try { window.parent.postMessage({type: '__edit_mode_set_keys', edits: next}, '*'); } catch {}
+          return next;
+        });
+      };
+
+      // Apply theme + style to html
+      React.useEffect(() => {
+        document.documentElement.dataset.theme = tweaks.theme;
+        document.documentElement.dataset.style = tweaks.style;
+      }, [tweaks.theme, tweaks.style]);
+
+      // Boot: load all data from API, then restore session
+      React.useEffect(() => {
+        // Clear old mock localStorage keys
+        ['vencidos_mock_products','vencidos_mock_users','vencidos_mock_audit_log','vencidos_filters'].forEach(k => {
+          try { localStorage.removeItem(k); } catch {}
+        });
+        window.MOCK.initFromAPI().then(() => {
+          window.MOCK.startAutoSync(5000);
+          setApiReady(true);
+          // Restore session after data loaded
+          try {
+            const saved = localStorage.getItem('vencidos_user');
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              const fresh = window.MOCK.USERS.find(u => u.id === parsed.id)
+                || window.MOCK.USERS.find(u => (u.username || '').toLowerCase() === (parsed.username || '').toLowerCase())
+                || parsed;
+              if (fresh && fresh.active !== false) {
+                setCurrentUser(fresh);
+                setCurrentView(getInitialView(fresh));
+                localStorage.setItem('vencidos_user', JSON.stringify(fresh));
+              } else {
+                localStorage.removeItem('vencidos_user');
+              }
+            }
+          } catch {}
+        }).catch(err => {
+          setApiError('No se puede conectar con el servidor. Verifica que el backend esté activo.');
+          console.error('API init failed:', err);
+        });
+      }, []);
+
+      const handleLogin = (user) => {
+        setCurrentUser(user);
+        localStorage.setItem('vencidos_user', JSON.stringify(user));
+        setCurrentView(getInitialView(user));
+      };
+
+      const handleNavigate = (view) => {
+        setCurrentView(view);
+        if (!currentUser) return;
+        try {
+          localStorage.setItem(getViewStorageKey(currentUser), view);
+        } catch {}
+      };
+
+      const handleLogout = () => {
+        setCurrentUser(null);
+        localStorage.removeItem('vencidos_user');
+        setCurrentView(null);
+      };
+
+      const toggleTheme = () => {
+        setTweak('theme', tweaks.theme === 'light' ? 'dark' : 'light');
+      };
+
+      // Tweaks panel protocol
+      React.useEffect(() => {
+        const handler = (e) => {
+          if (e.data?.type === '__activate_edit_mode') {
+            document.getElementById('tweaks-overlay')?.classList.add('visible');
+          }
+          if (e.data?.type === '__deactivate_edit_mode') {
+            document.getElementById('tweaks-overlay')?.classList.remove('visible');
+          }
+        };
+        window.addEventListener('message', handler);
+        window.parent.postMessage({type: '__edit_mode_available'}, '*');
+        return () => window.removeEventListener('message', handler);
+      }, []);
+
+      const renderView = () => {
+        if (!currentUser) return null;
+        switch (currentView) {
+          case 'registro':
+          case 'mis-productos':
+            return <SalaView user={currentUser} />;
+          case 'dashboard':
+            return <DashboardView role={currentUser.role} onNavigate={handleNavigate} />;
+          case 'tabla':
+            return <DataTableView />;
+          case 'consolidado':
+            return <ConsolidadoView />;
+          case 'catalogo':
+            return <CatalogoView user={currentUser} />;
+          case 'auditoria':
+            return <AuditView />;
+          case 'usuarios':
+            return <UsersView />;
+          case 'sincronizacion':
+            return <SyncStatusView />;
+          default:
+            return <DashboardView role={currentUser.role} onNavigate={handleNavigate} />;
+        }
+      };
+
+      // Loading screen
+      if (!apiReady) {
+        const isDark = tweaks.theme === 'dark';
+        return (
+          <div style={{
+            display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+            height:'100vh', width:'100vw', gap:20,
+            background: isDark ? '#09090B' : '#FAFAFA',
+            color: isDark ? '#A1A1AA' : '#71717A',
+          }}>
+            {apiError ? (
+              <div style={{textAlign:'center', maxWidth:360, padding:24}}>
+                <div style={{fontSize:32, marginBottom:12}}>⚠️</div>
+                <div style={{fontSize:16, fontWeight:700, color: isDark?'#F4F4F5':'#18181B', marginBottom:8}}>
+                  Error de conexión
+                </div>
+                <div style={{fontSize:13, lineHeight:1.6}}>{apiError}</div>
+                <button onClick={() => window.location.reload()}
+                  style={{marginTop:20, padding:'10px 24px', borderRadius:8, border:'none',
+                    background:'var(--accent,#6366F1)', color:'white', fontSize:14,
+                    fontWeight:600, cursor:'pointer'}}>
+                  Reintentar
+                </button>
+              </div>
+            ) : (
+              <React.Fragment>
+                <div style={{
+                  width:48, height:48, borderRadius:12, background:'var(--accent,#6366F1)',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+                  </svg>
+                </div>
+                <div style={{fontSize:14, fontWeight:500}}>Cargando Vencidos...</div>
+              </React.Fragment>
+            )}
+          </div>
+        );
+      }
+
+      if (!currentUser) {
+        return <LoginScreen onLogin={handleLogin} style={tweaks.style} theme={tweaks.theme} />;
+      }
+
+      return (
+        <React.Fragment>
+          <AppShell user={currentUser} currentView={currentView}
+            onNavigate={handleNavigate} onLogout={handleLogout}
+            onToggleTheme={toggleTheme} theme={tweaks.theme}>
+            {renderView()}
+          </AppShell>
+          <TweaksOverlay tweaks={tweaks} setTweak={setTweak} />
+        </React.Fragment>
+      );
+    };
+
+    /* Tweaks overlay panel */
+    const TweaksOverlay = ({ tweaks, setTweak }) => {
+      const [visible, setVisible] = React.useState(false);
+
+      React.useEffect(() => {
+        const handler = (e) => {
+          if (e.data?.type === '__activate_edit_mode') setVisible(true);
+          if (e.data?.type === '__deactivate_edit_mode') setVisible(false);
+        };
+        window.addEventListener('message', handler);
+        return () => window.removeEventListener('message', handler);
+      }, []);
+
+      const dismiss = () => {
+        setVisible(false);
+        window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
+      };
+
+      if (!visible) return null;
+
+      return (
+        <TweaksPanel onClose={dismiss} title="Tweaks">
+          <TweakSection label="Estilo visual">
+            <TweakRadio label="Estilo" value={tweaks.style}
+              options={[
+                { value: 'luminoso', label: 'Luminoso' },
+                { value: 'cristal', label: 'Cristal' },
+              ]}
+              onChange={v => setTweak('style', v)} />
+          </TweakSection>
+          <TweakSection label="Tema">
+            <TweakRadio label="Modo" value={tweaks.theme}
+              options={[
+                { value: 'light', label: 'Claro' },
+                { value: 'dark', label: 'Oscuro' },
+              ]}
+              onChange={v => setTweak('theme', v)} />
+          </TweakSection>
+        </TweaksPanel>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+
+  <script>
+    (function connect() {
+      const es = new EventSource('/vencidos/api/dev/reload');
+      es.onmessage = (e) => { if (e.data === 'reload') location.reload(); };
+      es.onerror = () => { es.close(); setTimeout(connect, 1000); };
+    })();
+  </script>
+</body>
+</html>

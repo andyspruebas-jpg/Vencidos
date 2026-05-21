@@ -1,0 +1,37 @@
+# Databases and database backups
+*.db
+*.db.bak.*
+backend/vencidos.db
+backend/vencidos.db.bak.*
+
+# Editor and Tooling Caches
+.claude/
+.vscode/
+.idea/
+.DS_Store
+
+# Python Caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Backups & Temporary files
+*.bak
+*.old
+*.bak.*
+*.old.*
+*~
+*.swp
+temp/
+uploads/
+
+# Deployment & Proxy configurations
+*.nginx
+*.nginx.bak
+stock-proxy.nginx
+
